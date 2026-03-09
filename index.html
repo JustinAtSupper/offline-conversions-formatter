@@ -273,6 +273,25 @@
       color: #f9efd1;
       font-size: 12px;
     }
+
+    .preset-badge {
+      position: absolute;
+      top: 14px;
+      left: 14px;
+      background: #231f20;
+      color: #f9efd1;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 6px;
+      opacity: 0;
+      transition: opacity 0.2s ease;
+      pointer-events: none;
+    }
+
+    .preset-badge.show {
+      opacity: 1;
+    }
   </style>
 </head>
 <body>
@@ -297,6 +316,7 @@
     
     <div class="outer-card">
       <div class="drop-zone" id="dropZone">
+        <div class="preset-badge" id="presetBadge"></div>
         <div class="drop-zone-content initial-state" id="dropZoneContent">
           <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="17 8 12 3 7 8"></polyline><line x1="12" y1="3" x2="12" y2="15"></line></svg>
           <span>Add files</span>
@@ -333,6 +353,7 @@
   <script>
     const dropZone = document.getElementById('dropZone');
     const dropZoneContent = document.getElementById('dropZoneContent');
+    const presetBadge = document.getElementById('presetBadge');
     const fileInput = document.getElementById('fileInput');
     const downloadBtn = document.getElementById('downloadBtn');
     const resetBtn = document.getElementById('resetBtn');
@@ -374,6 +395,7 @@
           fileInput.value = '';
           // Remove selected state from preset options
           presetMenu.querySelectorAll('.preset-option').forEach(opt => opt.classList.remove('selected'));
+          presetBadge.classList.remove('show');
         } else if (state === 'file-only') {
           dropZoneContent.innerHTML = settingsIcon + '<span>Select a preset to begin</span>';
           dropZoneContent.classList.remove('initial-state');
@@ -397,12 +419,25 @@
     // Custom dropdown logic
     presetToggle.addEventListener('click', (e) => {
       e.stopPropagation();
+      const isOpening = !presetDropdown.classList.contains('open');
       presetDropdown.classList.toggle('open');
+      if (isOpening) {
+        presetLabel.textContent = 'Presets';
+      } else if (currentPreset) {
+        // Restore selected name on close
+        const selected = presetMenu.querySelector('.preset-option.selected');
+        if (selected) presetLabel.textContent = selected.textContent;
+      }
     });
     
     document.addEventListener('click', (e) => {
       if (!presetDropdown.contains(e.target)) {
         presetDropdown.classList.remove('open');
+        // Restore selected name on close
+        if (currentPreset) {
+          const selected = presetMenu.querySelector('.preset-option.selected');
+          if (selected) presetLabel.textContent = selected.textContent;
+        }
       }
     });
     
@@ -416,6 +451,12 @@
         // Update selected state
         presetMenu.querySelectorAll('.preset-option').forEach(opt => opt.classList.remove('selected'));
         option.classList.add('selected');
+        
+        // Show preset badge only if files have been added
+        presetBadge.textContent = option.textContent + ' preset';
+        if (pendingFiles) {
+          presetBadge.classList.add('show');
+        }
         
         presetDropdown.classList.remove('open');
         
@@ -468,8 +509,9 @@
     function handleFilesSelected(files) {
       pendingFiles = files;
       
-      // If preset already selected, process immediately
+      // Show badge if preset already selected
       if (currentPreset) {
+        presetBadge.classList.add('show');
         processFiles(pendingFiles);
       } else {
         // No preset yet, show file-only state
@@ -556,7 +598,7 @@
           outputHeaders = ['event_time', 'fn', 'ln', 'phone', 'email', 'value', 'currency', 'event_name'];
           outputRows = processBigShots(allRawData);
         } else if (currentPreset === 'bigwhiskeys') {
-          outputHeaders = ['event_time', 'fn', 'ln', 'phone', 'email', 'value'];
+          outputHeaders = ['event_time', 'fn', 'ln', 'phone', 'email', 'value', 'currency', 'event_name'];
           outputRows = processBigWhiskeys(allRawData);
         } else {
           outputHeaders = ['event_time', 'fn', 'ln', 'phone', 'email', 'value', 'currency', 'event_name'];
@@ -651,7 +693,9 @@
           lastName,
           phone,
           email,
-          String(subtotal)
+          String(subtotal),
+          'USD',
+          'Purchase'
         ]);
       });
 
