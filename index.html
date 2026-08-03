@@ -104,6 +104,19 @@
     .drop-zone-content.fade-out {
       opacity: 0;
     }
+
+    /* Stacked layout when a breakdown is shown: number on top, table below */
+    .drop-zone-content.has-breakdown {
+      flex-direction: column;
+      height: auto;
+      gap: 0;
+    }
+    .processed-head {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+    }
     
     .drop-zone-content svg {
       width: 22px;
@@ -403,7 +416,8 @@
       
       setTimeout(() => {
         currentState = state;
-        
+        dropZoneContent.classList.remove('has-breakdown');
+
         if (state === 'initial') {
           dropZoneContent.innerHTML = uploadIcon + '<span>Add files</span>';
           dropZoneContent.classList.add('initial-state');
@@ -441,7 +455,12 @@
               `<div class="bd-row bd-total"><span class="bd-label">Total</span><span class="bd-rows">${count.toLocaleString()} rows</span><span class="bd-val">${money(total)}</span></div>` +
               '</div>';
           }
-          dropZoneContent.innerHTML = successIcon + `<span>Processed ${formattedCount} records</span>` + breakdownHTML;
+          if (breakdownHTML) {
+            dropZoneContent.innerHTML = `<div class="processed-head">${successIcon}<span>Processed ${formattedCount} records</span></div>` + breakdownHTML;
+            dropZoneContent.classList.add('has-breakdown');
+          } else {
+            dropZoneContent.innerHTML = successIcon + `<span>Processed ${formattedCount} records</span>`;
+          }
           dropZoneContent.classList.remove('initial-state');
           presetDropdown.classList.add('hidden');
           downloadBtn.classList.add('show');
