@@ -292,6 +292,28 @@
     .preset-badge.show {
       opacity: 1;
     }
+
+    /* Provenance breakdown (shown after processing) */
+    .breakdown {
+      margin-top: 18px;
+      width: 100%;
+      max-width: 420px;
+      font-size: 13px;
+      text-align: left;
+    }
+    .bd-row {
+      display: flex;
+      align-items: baseline;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 5px 0;
+      border-bottom: 1px solid rgba(249, 239, 209, 0.12);
+    }
+    .bd-label { flex: 1 1 auto; opacity: 0.85; }
+    .bd-rows { flex: 0 0 auto; opacity: 0.6; font-variant-numeric: tabular-nums; }
+    .bd-val { flex: 0 0 auto; font-weight: 600; font-variant-numeric: tabular-nums; min-width: 84px; text-align: right; }
+    .bd-total { border-bottom: none; margin-top: 4px; border-top: 1px solid rgba(249, 239, 209, 0.3); padding-top: 8px; }
+    .bd-total .bd-label { opacity: 1; font-weight: 600; }
   </style>
 </head>
 <body>
@@ -405,7 +427,21 @@
         } else if (state === 'processed') {
           const count = data.recordCount || 0;
           const formattedCount = count.toLocaleString();
-          dropZoneContent.innerHTML = successIcon + `<span>Processed ${formattedCount} records</span>`;
+          let breakdownHTML = '';
+          const b = data.breakdown;
+          if (b) {
+            const money = (n) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+            const line = (label, o) => `<div class="bd-row"><span class="bd-label">${label}</span><span class="bd-rows">${o.rows.toLocaleString()} rows</span><span class="bd-val">${money(o.value)}</span></div>`;
+            const total = b.matched.value + b.payments.value + b.reservation.value;
+            breakdownHTML =
+              '<div class="breakdown">' +
+              line('Matched (payment + reservation)', b.matched) +
+              line('Payments only', b.payments) +
+              line('Reservation only (onsite)', b.reservation) +
+              `<div class="bd-row bd-total"><span class="bd-label">Total</span><span class="bd-rows">${count.toLocaleString()} rows</span><span class="bd-val">${money(total)}</span></div>` +
+              '</div>';
+          }
+          dropZoneContent.innerHTML = successIcon + `<span>Processed ${formattedCount} records</span>` + breakdownHTML;
           dropZoneContent.classList.remove('initial-state');
           presetDropdown.classList.add('hidden');
           downloadBtn.classList.add('show');
@@ -569,6 +605,21 @@
       return '';
     }
 
+    // True if the row's header set contains a column matching name (case-insensitive)
+    function rowHasColumn(row, name) {
+      const target = name.toLowerCase().trim();
+      return Object.keys(row).some(k => k.toLowerCase().trim() === target);
+    }
+
+    // Parse a money string like "$45.47", "-$37.89", "1,234.00" -> Number (0 if blank/NaN)
+    function parseMoney(v) {
+      if (v == null) return 0;
+      const s = String(v).replace(/[$,]/g, '').trim();
+      if (s === '') return 0;
+      const n = parseFloat(s);
+      return isNaN(n) ? 0 : n;
+    }
+
     // Read a single file and return rows as array of objects (header-keyed)
     async function readFile(file) {
       if (file.name.match(/\.(xlsx|xls)$/i)) {
@@ -585,6 +636,7 @@
 
     async function processFiles(files) {
       try {
+        window.__bigshotsBreakdown = null;
         // Read all files and combine raw data
         let allRawData = [];
         for (const file of files) {
@@ -610,7 +662,7 @@
           formattedCSV += row.map(escapeCSVField).join(',') + '\n';
         });
         
-        setState('processed', { recordCount: outputRows.length });
+        setState('processed', { recordCount: outputRows.length, breakdown: window.__bigshotsBreakdown || null });
         
       } catch (err) {
         const errorIcon = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
@@ -619,33 +671,113 @@
       }
     }
     
+    // BigShots (SevenRooms) two-population cross-reference.
+    // Drop BOTH the reservations export and the payments export for one venue/period.
+    // Population 1 (payments): net-positive charge per Confirmation #, identity joined
+    //   from the reservation export when available (source "matched"), else payment-only.
+    // Population 2 (reservation-only): reservations with no payment row that still have
+    //   onsite/prepay value AND at least one contact identifier (email OR phone).
+    // A provenance breakdown (matched / payments / reservation) is stashed on
+    // window.__bigshotsBreakdown for the UI/console. The output CSV carries no source column.
     function processBigShots(rawData) {
-      const outputRows = [];
-      
+      // Classify each row by its distinguishing columns
+      const payments = [];
+      const reservations = [];
       rawData.forEach((row) => {
-        const rawRevenue = getColumnValue(row, 'Onsite Gross (USD)');
-        const revenueNum = parseFloat((rawRevenue || '0').replace(/[$,]/g, ''));
-        
-        if (isNaN(revenueNum) || revenueNum === 0) {
-          return;
+        if (rowHasColumn(row, 'Total Amount (USD)')) {
+          payments.push(row);
+        } else if (rowHasColumn(row, 'Onsite Gross (USD)') || rowHasColumn(row, 'Reservation Date')) {
+          reservations.push(row);
         }
-        
-        const { firstName, lastName } = splitName(getColumnValue(row, 'Full Name') || '');
-        const phone = formatPhoneNumber(getColumnValue(row, 'Phone Number') || '');
-        const revenue = formatRevenue(rawRevenue);
-        
-        outputRows.push([
-          getColumnValue(row, 'Created Date') || '',
-          firstName,
-          lastName,
-          phone,
-          getColumnValue(row, 'Guest Email') || '',
-          revenue,
-          'USD',
-          'Purchase'
-        ]);
       });
-      
+
+      // Index reservations by Confirmation #
+      const resByConf = {};
+      reservations.forEach((r) => {
+        const c = (getColumnValue(r, 'Confirmation #') || '').trim();
+        if (c) resByConf[c] = r;
+      });
+
+      // Group payment rows by Confirmation #
+      const payByConf = {};
+      payments.forEach((p) => {
+        const c = (getColumnValue(p, 'Confirmation #') || '').trim();
+        if (!c) return;
+        (payByConf[c] = payByConf[c] || []).push(p);
+      });
+
+      const outputRows = [];
+      const paidConfs = new Set();
+      const breakdown = {
+        matched: { rows: 0, value: 0 },
+        payments: { rows: 0, value: 0 },
+        reservation: { rows: 0, value: 0 }
+      };
+
+      // Population 1: payments, netted per confirmation, keep net > 0
+      Object.keys(payByConf).forEach((conf) => {
+        paidConfs.add(conf);
+        const prows = payByConf[conf];
+        let net = 0;
+        prows.forEach((p) => { net += parseMoney(getColumnValue(p, 'Total Amount (USD)')); });
+        if (Math.round(net * 100) / 100 <= 0) return;
+
+        // event_time = latest non-refund billing time (fall back to any billing time)
+        let times = prows
+          .filter((p) => (getColumnValue(p, 'Is Refund (Yes / No)') || '').trim().toLowerCase() !== 'yes')
+          .map((p) => (getColumnValue(p, 'Billing Charged - Local Time') || '').trim())
+          .filter(Boolean);
+        if (times.length === 0) {
+          times = prows.map((p) => (getColumnValue(p, 'Billing Charged - Local Time') || '').trim()).filter(Boolean);
+        }
+        const eventTime = times.length ? times.sort().slice(-1)[0] : '';
+
+        const res = resByConf[conf];
+        let firstName, lastName, phone, email, source;
+        if (res) {
+          const nm = splitName(getColumnValue(res, 'Full Name (Reservation)') || getColumnValue(prows[0], 'Guest Name') || '');
+          firstName = nm.firstName; lastName = nm.lastName;
+          phone = formatPhoneNumber(getColumnValue(res, 'Phone Number') || '');
+          email = getColumnValue(res, 'Guest Email') || '';
+          source = 'matched';
+        } else {
+          const nm = splitName(getColumnValue(prows[0], 'Guest Name') || '');
+          firstName = nm.firstName; lastName = nm.lastName;
+          phone = ''; email = ''; source = 'payments';
+        }
+        breakdown[source].rows++;
+        breakdown[source].value += net;
+        outputRows.push([eventTime, firstName, lastName, phone, email, formatRevenue(String(net)), 'USD', 'Purchase']);
+      });
+
+      // Population 2: reservations with no payment row, onsite/prepay value, email or phone
+      reservations.forEach((r) => {
+        const conf = (getColumnValue(r, 'Confirmation #') || '').trim();
+        if (conf && paidConfs.has(conf)) return;
+        const email = (getColumnValue(r, 'Guest Email') || '').trim();
+        const phoneRaw = (getColumnValue(r, 'Phone Number') || '').trim();
+        const val = parseMoney(getColumnValue(r, 'Prepayment Gross (USD)')) + parseMoney(getColumnValue(r, 'Onsite Gross (USD)'));
+        if (!(email || phoneRaw) || val <= 0) return;
+        const d = (getColumnValue(r, 'Reservation Date') || '').trim();
+        const t = (getColumnValue(r, 'Reservation Time') || '').trim();
+        const eventTime = (d + ' ' + t).trim();
+        const nm = splitName(getColumnValue(r, 'Full Name (Reservation)') || '');
+        breakdown.reservation.rows++;
+        breakdown.reservation.value += val;
+        outputRows.push([eventTime, nm.firstName, nm.lastName, formatPhoneNumber(phoneRaw), email, formatRevenue(String(val)), 'USD', 'Purchase']);
+      });
+
+      // Sort chronologically by event_time (ISO-ish strings sort correctly)
+      outputRows.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+
+      // Stash the provenance breakdown for the UI / console
+      window.__bigshotsBreakdown = breakdown;
+      const fmt = (n) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+      console.log('[BigShots provenance] matched: ' + breakdown.matched.rows + ' rows ' + fmt(breakdown.matched.value) +
+        ' | payments: ' + breakdown.payments.rows + ' rows ' + fmt(breakdown.payments.value) +
+        ' | reservation: ' + breakdown.reservation.rows + ' rows ' + fmt(breakdown.reservation.value) +
+        ' | total: ' + outputRows.length + ' rows');
+
       return outputRows;
     }
 
