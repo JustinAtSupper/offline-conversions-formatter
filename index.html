@@ -584,6 +584,15 @@
       return phone;
     }
 
+    // E.164 format for BigShots (e.g. +15736925955). Blank stays blank.
+    function formatPhoneE164(phone) {
+      const digits = (phone || '').replace(/\D/g, '');
+      if (!digits) return '';
+      if (digits.length === 11 && digits.startsWith('1')) return '+' + digits;
+      if (digits.length === 10) return '+1' + digits;
+      return '+' + digits;
+    }
+
     function splitName(fullName) {
       const parts = fullName.trim().split(' ');
       const firstName = parts[0] || '';
@@ -756,7 +765,7 @@
         if (res) {
           const nm = splitName(getColumnValue(res, 'Full Name (Reservation)') || getColumnValue(prows[0], 'Guest Name') || '');
           firstName = nm.firstName; lastName = nm.lastName;
-          phone = formatPhoneNumber(getColumnValue(res, 'Phone Number') || '');
+          phone = formatPhoneE164(getColumnValue(res, 'Phone Number') || '');
           email = getColumnValue(res, 'Guest Email') || '';
           source = 'matched';
         } else {
@@ -783,7 +792,7 @@
         const nm = splitName(getColumnValue(r, 'Full Name (Reservation)') || '');
         breakdown.reservation.rows++;
         breakdown.reservation.value += val;
-        outputRows.push([eventTime, nm.firstName, nm.lastName, formatPhoneNumber(phoneRaw), email, formatRevenue(String(val)), 'USD', 'Purchase']);
+        outputRows.push([eventTime, nm.firstName, nm.lastName, formatPhoneE164(phoneRaw), email, formatRevenue(String(val)), 'USD', 'Purchase']);
       });
 
       // Sort chronologically by event_time (ISO-ish strings sort correctly)
