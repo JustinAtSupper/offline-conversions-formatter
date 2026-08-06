@@ -369,6 +369,7 @@
           <div class="preset-menu" id="presetMenu">
             <div class="preset-option" data-value="bigshots">BigShots</div>
             <div class="preset-option" data-value="bigwhiskeys">Big Whiskey's</div>
+            <div class="preset-option" data-value="hisplace">His Place Eatery</div>
           </div>
         </div>
         
@@ -680,6 +681,9 @@
         } else if (currentPreset === 'bigwhiskeys') {
           outputHeaders = ['event_time', 'fn', 'ln', 'phone', 'email', 'value', 'currency', 'event_name'];
           outputRows = processBigWhiskeys(allRawData);
+        } else if (currentPreset === 'hisplace') {
+          outputHeaders = ['email', 'phone', 'timestamp', 'value', 'event_type'];
+          outputRows = processHisPlace(allRawData);
         } else {
           outputHeaders = ['event_time', 'fn', 'ln', 'phone', 'email', 'value', 'currency', 'event_name'];
           outputRows = processBigShots(allRawData);
@@ -806,6 +810,60 @@
         ' | reservation: ' + breakdown.reservation.rows + ' rows ' + fmt(breakdown.reservation.value) +
         ' | total: ' + outputRows.length + ' rows');
 
+      return outputRows;
+    }
+
+    // Offset (in minutes, e.g. -240 for EDT) that a given time zone was at `date`.
+    function tzOffsetMinutes(date, timeZone) {
+      const dtf = new Intl.DateTimeFormat('en-US', {
+        timeZone, hour12: false,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit'
+      });
+      const map = {};
+      dtf.formatToParts(date).forEach(p => { map[p.type] = p.value; });
+      let hh = map.hour === '24' ? '00' : map.hour;
+      const asUTC = Date.UTC(+map.year, +map.month - 1, +map.day, +hh, +map.minute, +map.second);
+      return Math.round((asUTC - date.getTime()) / 60000);
+    }
+
+    // His Place Eatery timestamp: "2026-07-17T16:10:44.397" -> "2026-07-17T16:10:44-04:00".
+    // Strips fractional seconds and appends the America/New_York offset for that wall-clock
+    // date (DST-aware: -04:00 in summer, -05:00 in winter). Blank stays blank.
+    function formatHisPlaceTimestamp(val) {
+      if (val == null) return '';
+      const s = String(val).trim();
+      if (!s) return '';
+      const m = s.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?/);
+      if (!m) return s;
+      const [, y, mo, d, h, mi, se] = m;
+      const sec = se || '00';
+      const base = `${y}-${mo}-${d}T${h}:${mi}:${sec}`;
+      // Treat the naive wall time as UTC to probe the zone's offset for that date.
+      const probe = new Date(Date.UTC(+y, +mo - 1, +d, +h, +mi, +sec));
+      const off = tzOffsetMinutes(probe, 'America/New_York');
+      const sign = off <= 0 ? '-' : '+';
+      const abs = Math.abs(off);
+      const oh = String(Math.floor(abs / 60)).padStart(2, '0');
+      const om = String(abs % 60).padStart(2, '0');
+      return `${base}${sign}${oh}:${om}`;
+    }
+
+    // His Place Eatery (Toast guest list export).
+    // Input columns: email1, phone1, firstName, lastName, lastVisitDate, averageSpend, guestGuid
+    // Output: email, phone, timestamp, value, event_type
+    // Name/guid columns are dropped; phone and value pass through untouched; timestamp is
+    // reformatted with an Eastern offset; event_type is the constant "Purchase". Row order
+    // is preserved (no sorting, no dedup).
+    function processHisPlace(rawData) {
+      const outputRows = [];
+      rawData.forEach((row) => {
+        const email = (getColumnValue(row, 'email1') || '').trim().toLowerCase();
+        const phone = (getColumnValue(row, 'phone1') || '').trim();
+        const timestamp = formatHisPlaceTimestamp(getColumnValue(row, 'lastVisitDate') || '');
+        const value = (getColumnValue(row, 'averageSpend') || '').toString().trim();
+        outputRows.push([email, phone, timestamp, value, 'Purchase']);
+      });
       return outputRows;
     }
 
